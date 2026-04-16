@@ -9,17 +9,20 @@ interface SchedulingStore {
   addEventType: (eventType: EventType) => void
   updateEventType: (id: string, updates: Partial<EventType>) => void
   deleteEventType: (id: string) => void
+  setEventTypes: (eventTypes: EventType[]) => void
   
   // Availability
   availability: DayAvailability[]
   updateAvailability: (day: string, updates: Partial<DayAvailability>) => void
   addTimeSlot: (day: string, slot: { id: string; start: string; end: string }) => void
   removeTimeSlot: (day: string, slotId: string) => void
+  setAvailability: (availability: DayAvailability[]) => void
   
   // Bookings
   bookings: Booking[]
   addBooking: (booking: Booking) => void
   cancelBooking: (id: string) => void
+  setBookings: (bookings: Booking[]) => void
   
   // User preferences
   timezone: string
@@ -57,6 +60,8 @@ export const useSchedulingStore = create<SchedulingStore>()(
         set((state) => ({
           eventTypes: state.eventTypes.filter((et) => et.id !== id),
         })),
+
+      setEventTypes: (eventTypes) => set({ eventTypes }),
       
       // Availability actions
       updateAvailability: (day, updates) =>
@@ -81,6 +86,8 @@ export const useSchedulingStore = create<SchedulingStore>()(
               : a
           ),
         })),
+
+      setAvailability: (availability) => set({ availability }),
       
       // Booking actions
       addBooking: (booking) =>
@@ -94,6 +101,8 @@ export const useSchedulingStore = create<SchedulingStore>()(
             b.id === id ? { ...b, status: 'cancelled' as const } : b
           ),
         })),
+
+      setBookings: (bookings) => set({ bookings }),
       
       // Preferences
       setTimezone: (tz) => set({ timezone: tz }),

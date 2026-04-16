@@ -5,6 +5,9 @@ export interface EventType {
   duration: number
   slug: string
   color: string
+  bufferBeforeMinutes?: number
+  bufferAfterMinutes?: number
+  questions?: BookingQuestion[]
 }
 
 export interface TimeSlot {
@@ -19,6 +22,39 @@ export interface DayAvailability {
   slots: TimeSlot[]
 }
 
+export interface AvailabilitySchedule {
+  id: string
+  name: string
+  isActive: boolean
+  availability: DayAvailability[]
+}
+
+export interface DateOverride {
+  id: string
+  date: string
+  blocked: boolean
+  slots: TimeSlot[]
+}
+
+export interface BookingQuestionOption {
+  label: string
+  value: string
+}
+
+export interface BookingQuestion {
+  id: string
+  label: string
+  type: 'short_text' | 'long_text' | 'select'
+  required: boolean
+  options?: BookingQuestionOption[]
+}
+
+export interface BookingAnswer {
+  questionId: string
+  questionLabel: string
+  value: string
+}
+
 export interface Booking {
   id: string
   guestName: string
@@ -27,6 +63,14 @@ export interface Booking {
   date: string
   time: string
   status: 'upcoming' | 'past' | 'cancelled'
+  eventTypeId?: string
+  eventSlug?: string
+  startTime?: string
+  endTime?: string
+  notes?: string
+  answers?: BookingAnswer[]
+  rescheduledFromId?: string | null
+  rescheduledToId?: string | null
 }
 
 export interface User {

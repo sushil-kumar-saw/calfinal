@@ -2,7 +2,6 @@
 
 import * as React from 'react'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
 import {
   CalendarDays,
   Clock,
@@ -25,33 +24,155 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
-import { useSchedulingStore, getAvailableSlots } from '@/lib/store'
+import { useSchedulingStore } from '@/lib/store'
 import { mockUser, timezones } from '@/lib/mock-data'
-import type { Booking } from '@/lib/types'
+import type { EventType } from '@/lib/types'
+import type { GeneratedSlot } from '@/lib/slots'
+import { toast } from 'sonner'
+
+const colorPalette = ['bg-blue-500', 'bg-emerald-500', 'bg-amber-500', 'bg-rose-500', 'bg-purple-500']
 
 type BookingStep = 'select-time' | 'details' | 'confirmed'
 
 export default function EventBookingPage({
   params,
 }: {
-  params: Promise<{ username: string; eventSlug: string }>
+  params: { username: string; eventSlug: string }
 }) {
-  const { username, eventSlug } = React.use(params)
-  const router = useRouter()
-  const { eventTypes, availability, bookings, addBooking, timezone, setTimezone } = useSchedulingStore()
+  const { username, eventSlug } = params
+  const { eventTypes, availability, timezone, setTimezone } = useSchedulingStore()
 
   const [step, setStep] = React.useState<BookingStep>('select-time')
   const [currentMonth, setCurrentMonth] = React.useState(new Date())
   const [selectedDate, setSelectedDate] = React.useState<Date | null>(null)
   const [selectedTime, setSelectedTime] = React.useState<string | null>(null)
+  const [selectedStartTime, setSelectedStartTime] = React.useState<string | null>(null)
+  const [availableSlots, setAvailableSlots] = React.useState<GeneratedSlot[]>([])
+  const [apiEventType, setApiEventType] = React.useState<EventType | null>(null)
+  const [eventTypeHydrated, setEventTypeHydrated] = React.useState(false)
+  const [availabilityHydrated, setAvailabilityHydrated] = React.useState(false)
+  const [enabledDays, setEnabledDays] = React.useState<boolean[]>([false, false, false, false, false, false, false])
   const [name, setName] = React.useState('')
   const [email, setEmail] = React.useState('')
   const [notes, setNotes] = React.useState('')
+  const [answers, setAnswers] = React.useState<Record<string, string>>({})
   const [isSubmitting, setIsSubmitting] = React.useState(false)
 
-  const eventType = eventTypes.find((e) => e.slug === eventSlug)
+  React.useEffect(() => {
+    let cancelled = false
+
+    async function loadEventType() {
+      try {
+        const res = await fetch(`/api/event/${eventSlug}`)
+        if (!res.ok) return
+
+        const data = (await res.json()) as { eventType: any }
+        if (cancelled) return
+
+        const et = data.eventType
+        if (!et) return
+
+        const colorIndex =
+          et.slug?.split?.('').reduce((acc: number, ch: string) => acc + ch.charCodeAt(0), 0) ??
+          0
+
+        setApiEventType({
+          id: et.id,
+          title: et.title,
+          description: et.description,
+          duration: et.duration,
+          slug: et.slug,
+          color: et.color ?? colorPalette[colorIndex % colorPalette.length],
+          bufferBeforeMinutes: et.bufferBeforeMinutes ?? 0,
+          bufferAfterMinutes: et.bufferAfterMinutes ?? 0,
+          questions: et.questions ?? [],
+        })
+      } catch {
+        // Keep mock fallback if backend isn't reachable.
+      } finally {
+        if (!cancelled) setEventTypeHydrated(true)
+      }
+    }
+
+    async function loadAvailability() {
+      try {
+        const res = await fetch('/api/availability')
+        if (!res.ok) return
+        const data = (await res.json()) as {
+          availability: Array<{ dayOfWeek: number; enabled: boolean }>
+          timezone?: string
+        }
+        const nextEnabled = [false, false, false, false, false, false, false]
+        for (const d of data.availability) {
+          nextEnabled[d.dayOfWeek] = d.enabled
+        }
+        if (!cancelled) {
+          setEnabledDays(nextEnabled)
+          if (data.timezone) setTimezone(data.timezone)
+          setAvailabilityHydrated(true)
+        }
+      } catch {
+        // Keep mock fallback.
+      }
+    }
+
+    loadEventType()
+    loadAvailability()
+
+    return () => {
+      cancelled = true
+    }
+  }, [eventSlug])
+
+  React.useEffect(() => {
+    let cancelled = false
+
+    async function loadSlots() {
+      if (!selectedDate) {
+        setAvailableSlots([])
+        return
+      }
+      try {
+        const dateStr = selectedDate.toISOString().split('T')[0]
+        const res = await fetch('/api/slots', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ eventSlug, date: dateStr }),
+        })
+
+        if (!res.ok) return
+        const data = (await res.json()) as { slots: GeneratedSlot[] }
+        if (!cancelled) setAvailableSlots(data.slots ?? [])
+      } catch {
+        // If slot generation fails, show empty state.
+        if (!cancelled) setAvailableSlots([])
+      }
+    }
+
+    loadSlots()
+
+    return () => {
+      cancelled = true
+    }
+  }, [selectedDate, eventSlug])
+
+  const initialEventType = eventTypes.find((e) => e.slug === eventSlug) ?? null
+  const eventType = apiEventType ?? initialEventType
 
   if (!eventType) {
+    if (!eventTypeHydrated) {
+      return (
+        <div className="flex min-h-screen items-center justify-center bg-muted/30">
+          <Card className="max-w-md">
+            <CardContent className="flex flex-col items-center py-12 text-center gap-2">
+              <CalendarDays className="size-12 text-muted-foreground" />
+              <div className="text-sm text-muted-foreground">Loading event…</div>
+            </CardContent>
+          </Card>
+        </div>
+      )
+    }
+
     return (
       <div className="flex min-h-screen items-center justify-center bg-muted/30">
         <Card className="max-w-md">
@@ -95,22 +216,27 @@ export default function EventBookingPage({
 
   const isDateAvailable = (date: Date) => {
     if (date < today) return false
+    if (availabilityHydrated) {
+      // Backend computes dayOfWeek from the UTC date string we send to `/api/slots`.
+      // Use UTC here to avoid timezone drift between server + client.
+      const dayOfWeek = date.getUTCDay() // 0=Sun..6=Sat
+      return enabledDays[dayOfWeek] ?? false
+    }
+
     const dayName = date.toLocaleDateString('en-US', { weekday: 'long' })
     const dayAvailability = availability.find((a) => a.day === dayName)
     return dayAvailability?.enabled ?? false
   }
 
-  const availableSlots = selectedDate
-    ? getAvailableSlots(selectedDate, eventType.duration, availability, bookings)
-    : []
-
   const handleDateSelect = (date: Date) => {
     setSelectedDate(date)
     setSelectedTime(null)
+    setSelectedStartTime(null)
   }
 
-  const handleTimeSelect = (time: string) => {
-    setSelectedTime(time)
+  const handleTimeSelect = (slot: GeneratedSlot) => {
+    setSelectedTime(slot.displayTime)
+    setSelectedStartTime(slot.startTime)
   }
 
   const handleContinue = () => {
@@ -127,26 +253,39 @@ export default function EventBookingPage({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!selectedDate || !selectedTime || !name || !email) return
+    if (!selectedDate || !selectedStartTime || !name || !email) return
 
     setIsSubmitting(true)
 
-    // Simulate API call
-    await new Promise((resolve) => setTimeout(resolve, 1000))
+    try {
+      const dateStr = selectedDate.toISOString().split('T')[0]
 
-    const newBooking: Booking = {
-      id: Date.now().toString(),
-      guestName: name,
-      guestEmail: email,
-      eventType: eventType.title,
-      date: selectedDate.toISOString().split('T')[0],
-      time: selectedTime,
-      status: 'upcoming',
+      const res = await fetch('/api/bookings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          eventSlug,
+          name,
+          email,
+          date: dateStr,
+          startTime: selectedStartTime,
+          notes,
+          answers: Object.entries(answers).map(([questionId, value]) => ({ questionId, value })),
+        }),
+      })
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => null)
+        toast.error(err?.error ?? 'Failed to schedule event')
+        return
+      }
+
+      setStep('confirmed')
+    } catch {
+      toast.error('Failed to schedule event')
+    } finally {
+      setIsSubmitting(false)
     }
-
-    addBooking(newBooking)
-    setIsSubmitting(false)
-    setStep('confirmed')
   }
 
   const colorMap: Record<string, string> = {
@@ -238,6 +377,14 @@ export default function EventBookingPage({
                   <Clock className="size-4" />
                   <span>{eventType.duration} min</span>
                 </div>
+                {(eventType.bufferBeforeMinutes || eventType.bufferAfterMinutes) ? (
+                  <div className="flex items-center gap-2">
+                    <Clock className="size-4" />
+                    <span>
+                      Buffer {eventType.bufferBeforeMinutes ?? 0}/{eventType.bufferAfterMinutes ?? 0} min
+                    </span>
+                  </div>
+                ) : null}
                 <div className="flex items-center gap-2">
                   <Globe className="size-4" />
                   <Select value={timezone} onValueChange={setTimezone}>
@@ -370,17 +517,17 @@ export default function EventBookingPage({
                             No available slots
                           </p>
                         ) : (
-                          availableSlots.map((time) => (
+                          availableSlots.map((slot) => (
                             <button
-                              key={time}
-                              onClick={() => handleTimeSelect(time)}
+                              key={slot.startTime}
+                              onClick={() => handleTimeSelect(slot)}
                               className={cn(
                                 'w-full rounded-lg border border-border px-3 py-2 text-sm font-medium transition-colors hover:border-primary hover:bg-primary/5',
-                                selectedTime === time &&
+                                selectedTime === slot.displayTime &&
                                   'border-primary bg-primary text-primary-foreground hover:bg-primary'
                               )}
                             >
-                              {time}
+                              {slot.displayTime}
                             </button>
                           ))
                         )}
@@ -441,6 +588,55 @@ export default function EventBookingPage({
                       className="mt-1.5 min-h-[100px]"
                     />
                   </div>
+
+                  {(eventType.questions ?? []).map((question) => (
+                    <div key={question.id}>
+                      <label className="text-sm font-medium">
+                        {question.label}
+                        {question.required ? ' *' : ' '}
+                        {!question.required && (
+                          <span className="text-muted-foreground">(optional)</span>
+                        )}
+                      </label>
+                      {question.type === 'long_text' ? (
+                        <Textarea
+                          value={answers[question.id] ?? ''}
+                          onChange={(e) =>
+                            setAnswers((current) => ({ ...current, [question.id]: e.target.value }))
+                          }
+                          required={question.required}
+                          className="mt-1.5 min-h-[90px]"
+                        />
+                      ) : question.type === 'select' ? (
+                        <Select
+                          value={answers[question.id] ?? ''}
+                          onValueChange={(value) =>
+                            setAnswers((current) => ({ ...current, [question.id]: value }))
+                          }
+                        >
+                          <SelectTrigger className="mt-1.5">
+                            <SelectValue placeholder="Select an option" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {(question.options ?? []).map((option) => (
+                              <SelectItem key={`${question.id}-${option.value}`} value={option.value}>
+                                {option.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <Input
+                          value={answers[question.id] ?? ''}
+                          onChange={(e) =>
+                            setAnswers((current) => ({ ...current, [question.id]: e.target.value }))
+                          }
+                          required={question.required}
+                          className="mt-1.5"
+                        />
+                      )}
+                    </div>
+                  ))}
 
                   <Button
                     type="submit"

@@ -12,7 +12,6 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
-import { Label } from '@/components/ui/label'
 import {
   Select,
   SelectContent,
@@ -57,6 +56,11 @@ export function EventTypeDialog({
   const [description, setDescription] = React.useState('')
   const [duration, setDuration] = React.useState('30')
   const [color, setColor] = React.useState('bg-blue-500')
+  const [bufferBeforeMinutes, setBufferBeforeMinutes] = React.useState('0')
+  const [bufferAfterMinutes, setBufferAfterMinutes] = React.useState('0')
+  const [questions, setQuestions] = React.useState<
+    NonNullable<EventType['questions']>
+  >([])
 
   React.useEffect(() => {
     if (eventType) {
@@ -64,13 +68,32 @@ export function EventTypeDialog({
       setDescription(eventType.description)
       setDuration(eventType.duration.toString())
       setColor(eventType.color)
+      setBufferBeforeMinutes(String(eventType.bufferBeforeMinutes ?? 0))
+      setBufferAfterMinutes(String(eventType.bufferAfterMinutes ?? 0))
+      setQuestions(eventType.questions ?? [])
     } else {
       setTitle('')
       setDescription('')
       setDuration('30')
       setColor('bg-blue-500')
+      setBufferBeforeMinutes('0')
+      setBufferAfterMinutes('0')
+      setQuestions([])
     }
   }, [eventType, open])
+
+  const addQuestion = () => {
+    setQuestions((current) => [
+      ...current,
+      {
+        id: `question_${Date.now()}_${current.length}`,
+        label: '',
+        type: 'short_text',
+        required: false,
+        options: [],
+      },
+    ])
+  }
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -81,6 +104,15 @@ export function EventTypeDialog({
       duration: parseInt(duration),
       slug: title.toLowerCase().replace(/\s+/g, '-'),
       color,
+      bufferBeforeMinutes: parseInt(bufferBeforeMinutes || '0', 10),
+      bufferAfterMinutes: parseInt(bufferAfterMinutes || '0', 10),
+      questions: questions.map((question) => ({
+        ...question,
+        options:
+          question.type === 'select'
+            ? (question.options ?? []).filter((option) => option.label && option.value)
+            : [],
+      })),
     })
     onOpenChange(false)
   }
@@ -153,6 +185,182 @@ export function EventTypeDialog({
                     title={option.label}
                   />
                 ))}
+              </div>
+            </Field>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field>
+                <FieldLabel htmlFor="buffer-before">Buffer before (minutes)</FieldLabel>
+                <Input
+                  id="buffer-before"
+                  type="number"
+                  min="0"
+                  value={bufferBeforeMinutes}
+                  onChange={(e) => setBufferBeforeMinutes(e.target.value)}
+                />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="buffer-after">Buffer after (minutes)</FieldLabel>
+                <Input
+                  id="buffer-after"
+                  type="number"
+                  min="0"
+                  value={bufferAfterMinutes}
+                  onChange={(e) => setBufferAfterMinutes(e.target.value)}
+                />
+              </Field>
+            </div>
+            <Field>
+              <div className="flex items-center justify-between">
+                <FieldLabel>Custom booking questions</FieldLabel>
+                <Button type="button" variant="outline" size="sm" onClick={addQuestion}>
+                  Add question
+                </Button>
+              </div>
+              <div className="space-y-3">
+                {questions.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">
+                    Ask guests for extra details before the meeting.
+                  </p>
+                ) : (
+                  questions.map((question, index) => (
+                    <div key={question.id} className="space-y-3 rounded-lg border p-3">
+                      <Input
+                        value={question.label}
+                        onChange={(e) =>
+                          setQuestions((current) =>
+                            current.map((item, itemIndex) =>
+                              itemIndex === index ? { ...item, label: e.target.value } : item
+                            )
+                          )
+                        }
+                        placeholder="Question label"
+                      />
+                      <div className="grid gap-3 sm:grid-cols-[1fr_auto_auto]">
+                        <Select
+                          value={question.type}
+                          onValueChange={(value) =>
+                            setQuestions((current) =>
+                              current.map((item, itemIndex) =>
+                                itemIndex === index
+                                  ? {
+                                      ...item,
+                                      type: value as 'short_text' | 'long_text' | 'select',
+                                      options:
+                                        value === 'select'
+                                          ? item.options?.length
+                                            ? item.options
+                                            : [{ label: '', value: '' }]
+                                          : [],
+                                    }
+                                  : item
+                              )
+                            )
+                          }
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="short_text">Short text</SelectItem>
+                            <SelectItem value="long_text">Long text</SelectItem>
+                            <SelectItem value="select">Select</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <label className="flex items-center gap-2 text-sm">
+                          <input
+                            type="checkbox"
+                            checked={question.required}
+                            onChange={(e) =>
+                              setQuestions((current) =>
+                                current.map((item, itemIndex) =>
+                                  itemIndex === index ? { ...item, required: e.target.checked } : item
+                                )
+                              )
+                            }
+                          />
+                          Required
+                        </label>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() =>
+                            setQuestions((current) => current.filter((_, itemIndex) => itemIndex !== index))
+                          }
+                        >
+                          Remove
+                        </Button>
+                      </div>
+                      {question.type === 'select' && (
+                        <div className="space-y-2">
+                          {(question.options ?? []).map((option, optionIndex) => (
+                            <div key={`${question.id}-${optionIndex}`} className="grid gap-2 sm:grid-cols-2">
+                              <Input
+                                value={option.label}
+                                onChange={(e) =>
+                                  setQuestions((current) =>
+                                    current.map((item, itemIndex) =>
+                                      itemIndex === index
+                                        ? {
+                                            ...item,
+                                            options: (item.options ?? []).map((existing, existingIndex) =>
+                                              existingIndex === optionIndex
+                                                ? { ...existing, label: e.target.value }
+                                                : existing
+                                            ),
+                                          }
+                                        : item
+                                    )
+                                  )
+                                }
+                                placeholder="Option label"
+                              />
+                              <Input
+                                value={option.value}
+                                onChange={(e) =>
+                                  setQuestions((current) =>
+                                    current.map((item, itemIndex) =>
+                                      itemIndex === index
+                                        ? {
+                                            ...item,
+                                            options: (item.options ?? []).map((existing, existingIndex) =>
+                                              existingIndex === optionIndex
+                                                ? { ...existing, value: e.target.value }
+                                                : existing
+                                            ),
+                                          }
+                                        : item
+                                    )
+                                  )
+                                }
+                                placeholder="Option value"
+                              />
+                            </div>
+                          ))}
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() =>
+                              setQuestions((current) =>
+                                current.map((item, itemIndex) =>
+                                  itemIndex === index
+                                    ? {
+                                        ...item,
+                                        options: [...(item.options ?? []), { label: '', value: '' }],
+                                      }
+                                    : item
+                                )
+                              )
+                            }
+                          >
+                            Add option
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  ))
+                )}
               </div>
             </Field>
           </FieldGroup>

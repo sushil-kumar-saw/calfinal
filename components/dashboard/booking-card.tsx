@@ -28,9 +28,10 @@ import { cn } from '@/lib/utils'
 interface BookingCardProps {
   booking: Booking
   onCancel?: (id: string) => void
+  onReschedule?: (booking: Booking) => void
 }
 
-export function BookingCard({ booking, onCancel }: BookingCardProps) {
+export function BookingCard({ booking, onCancel, onReschedule }: BookingCardProps) {
   const isPast = booking.status === 'past'
   const isCancelled = booking.status === 'cancelled'
 
@@ -104,6 +105,7 @@ export function BookingCard({ booking, onCancel }: BookingCardProps) {
                     variant="outline"
                     size="sm"
                     className="hidden gap-1.5 sm:inline-flex"
+                    onClick={() => onReschedule?.(booking)}
                   >
                     <MessageSquare className="size-4" />
                     Reschedule
@@ -120,7 +122,7 @@ export function BookingCard({ booking, onCancel }: BookingCardProps) {
                           <Video className="mr-2 size-4" />
                           Join meeting
                         </DropdownMenuItem>
-                        <DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => onReschedule?.(booking)}>
                           <MessageSquare className="mr-2 size-4" />
                           Reschedule
                         </DropdownMenuItem>

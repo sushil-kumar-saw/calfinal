@@ -14,43 +14,79 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import type { TimeSlot } from '@/lib/types'
+import type { DayAvailability, TimeSlot } from '@/lib/types'
 import { timezones } from '@/lib/mock-data'
 import { useSchedulingStore } from '@/lib/store'
 import { toast } from 'sonner'
 
-export function AvailabilityForm() {
-  const { availability, updateAvailability, addTimeSlot, removeTimeSlot, timezone, setTimezone } = useSchedulingStore()
+interface AvailabilityFormProps {
+  availability?: DayAvailability[]
+  setAvailabilityState?: React.Dispatch<React.SetStateAction<DayAvailability[]>>
+  timezone?: string
+  setTimezoneState?: (timezone: string) => void
+  onSave?: () => Promise<void>
+}
+
+export function AvailabilityForm(props: AvailabilityFormProps) {
+  const store = useSchedulingStore()
+  const availability = props.availability ?? store.availability
+  const timezone = props.timezone ?? store.timezone
+  const setTimezoneValue = props.setTimezoneState ?? store.setTimezone
   const [copiedDay, setCopiedDay] = React.useState<string | null>(null)
 
-  const toggleDay = (day: string, currentEnabled: boolean) => {
-    if (currentEnabled) {
-      updateAvailability(day, { enabled: false, slots: [] })
-    } else {
-      updateAvailability(day, {
-        enabled: true,
-        slots: [{ id: Date.now().toString(), start: '09:00', end: '17:00' }],
-      })
+  const updateAvailabilityState = (updater: (current: DayAvailability[]) => DayAvailability[]) => {
+    if (props.setAvailabilityState) {
+      props.setAvailabilityState((current) => updater(current))
+      return
     }
+    const next = updater(store.availability)
+    store.setAvailability(next)
+  }
+
+  const toggleDay = (day: string, currentEnabled: boolean) => {
+    updateAvailabilityState((current) =>
+      current.map((item) =>
+        item.day === day
+          ? currentEnabled
+            ? { ...item, enabled: false, slots: [] }
+            : { ...item, enabled: true, slots: [{ id: Date.now().toString(), start: '09:00', end: '17:00' }] }
+          : item
+      )
+    )
   }
 
   const handleAddSlot = (day: string) => {
     const dayData = availability.find((a) => a.day === day)
-    const lastSlot = dayData?.slots[dayData.slots.length - 1]
+    const slots = dayData?.slots ?? []
+    const lastSlot = slots[slots.length - 1]
     const newSlot: TimeSlot = {
       id: Date.now().toString(),
       start: lastSlot ? lastSlot.end : '09:00',
       end: '17:00',
     }
-    addTimeSlot(day, newSlot)
+    updateAvailabilityState((current) =>
+      current.map((item) =>
+        item.day === day ? { ...item, slots: [...item.slots, newSlot] } : item
+      )
+    )
   }
 
   const handleRemoveSlot = (day: string, slotId: string) => {
     const dayData = availability.find((a) => a.day === day)
     if (dayData && dayData.slots.length <= 1) {
-      updateAvailability(day, { enabled: false, slots: [] })
+      updateAvailabilityState((current) =>
+        current.map((item) =>
+          item.day === day ? { ...item, enabled: false, slots: [] } : item
+        )
+      )
     } else {
-      removeTimeSlot(day, slotId)
+      updateAvailabilityState((current) =>
+        current.map((item) =>
+          item.day === day
+            ? { ...item, slots: item.slots.filter((slot) => slot.id !== slotId) }
+            : item
+        )
+      )
     }
   }
 
@@ -62,10 +98,18 @@ export function AvailabilityForm() {
   ) => {
     const dayData = availability.find((a) => a.day === day)
     if (dayData) {
-      const updatedSlots = dayData.slots.map((slot) =>
-        slot.id === slotId ? { ...slot, [field]: value } : slot
+      updateAvailabilityState((current) =>
+        current.map((item) =>
+          item.day === day
+            ? {
+                ...item,
+                slots: item.slots.map((slot) =>
+                  slot.id === slotId ? { ...slot, [field]: value } : slot
+                ),
+              }
+            : item
+        )
       )
-      updateAvailability(day, { slots: updatedSlots })
     }
   }
 
@@ -74,25 +118,48 @@ export function AvailabilityForm() {
     if (!sourceDayData) return
 
     const weekdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']
-    weekdays.forEach((day) => {
-      if (day !== sourceDay) {
-        updateAvailability(day, {
-          enabled: sourceDayData.enabled,
-          slots: sourceDayData.slots.map((slot) => ({
-            ...slot,
-            id: `${day}-${Date.now()}-${Math.random()}`,
-          })),
-        })
-      }
-    })
+    updateAvailabilityState((current) =>
+      current.map((item) =>
+        weekdays.includes(item.day) && item.day !== sourceDay
+          ? {
+              ...item,
+              enabled: sourceDayData.enabled,
+              slots: sourceDayData.slots.map((slot) => ({
+                ...slot,
+                id: `${item.day}-${Date.now()}-${Math.random()}`,
+              })),
+            }
+          : item
+      )
+    )
 
     setCopiedDay(sourceDay)
     setTimeout(() => setCopiedDay(null), 2000)
     toast.success('Schedule copied to all weekdays')
   }
 
-  const handleSave = () => {
-    toast.success('Availability saved successfully')
+  const handleSave = async () => {
+    if (props.onSave) {
+      await props.onSave()
+      return
+    }
+    try {
+      const res = await fetch('/api/availability', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ availability, timezone }),
+      })
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => null)
+        toast.error(err?.error ?? 'Failed to save availability')
+        return
+      }
+
+      toast.success('Availability saved successfully')
+    } catch {
+      toast.error('Failed to save availability')
+    }
   }
 
   return (
@@ -106,7 +173,7 @@ export function AvailabilityForm() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <Select value={timezone} onValueChange={setTimezone}>
+          <Select value={timezone} onValueChange={setTimezoneValue}>
             <SelectTrigger className="w-full max-w-sm">
               <SelectValue placeholder="Select timezone" />
             </SelectTrigger>

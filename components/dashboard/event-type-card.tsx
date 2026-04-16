@@ -29,9 +29,10 @@ export function EventTypeCard({ eventType, onEdit, onDelete }: EventTypeCardProp
   const [enabled, setEnabled] = useState(true)
 
   const username = mockUser.name.toLowerCase().replace(' ', '')
-  const bookingLink = `${window.location.origin}/${username}/${eventType.slug}`
 
   const handleCopyLink = async () => {
+    if (typeof window === 'undefined') return
+    const bookingLink = `${window.location.origin}/${username}/${eventType.slug}`
     await navigator.clipboard.writeText(bookingLink)
     setCopied(true)
     toast.success('Booking link copied to clipboard')
@@ -115,9 +116,18 @@ export function EventTypeCard({ eventType, onEdit, onDelete }: EventTypeCardProp
         </div>
 
         <div className="mt-4 flex items-center justify-between">
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Clock className="size-4" />
-            <span>{eventType.duration} min</span>
+          <div className="space-y-1 text-sm text-muted-foreground">
+            <div className="flex items-center gap-2">
+              <Clock className="size-4" />
+              <span>{eventType.duration} min</span>
+            </div>
+            {(eventType.bufferBeforeMinutes || eventType.bufferAfterMinutes || eventType.questions?.length) ? (
+              <div className="text-xs">
+                Buffer {eventType.bufferBeforeMinutes ?? 0}/{eventType.bufferAfterMinutes ?? 0} min
+                {' • '}
+                {eventType.questions?.length ?? 0} question{(eventType.questions?.length ?? 0) === 1 ? '' : 's'}
+              </div>
+            ) : null}
           </div>
 
           <Button

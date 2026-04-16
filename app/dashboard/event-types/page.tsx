@@ -9,10 +9,43 @@ import { useSchedulingStore } from '@/lib/store'
 import type { EventType } from '@/lib/types'
 import { toast } from 'sonner'
 
+const colorPalette = ['bg-blue-500', 'bg-emerald-500', 'bg-amber-500', 'bg-rose-500', 'bg-purple-500']
+
+function colorForSlug(slug: string) {
+  const sum = slug.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0)
+  return colorPalette[sum % colorPalette.length]
+}
+
 export default function EventTypesPage() {
-  const { eventTypes, addEventType, updateEventType, deleteEventType } = useSchedulingStore()
+  const { eventTypes, setEventTypes } = useSchedulingStore()
   const [dialogOpen, setDialogOpen] = React.useState(false)
   const [editingEventType, setEditingEventType] = React.useState<EventType | null>(null)
+
+  const loadEventTypes = React.useCallback(async () => {
+    try {
+      const res = await fetch('/api/event-types')
+      if (!res.ok) return
+      const data = (await res.json()) as { eventTypes: Array<any> }
+      const mapped: EventType[] = data.eventTypes.map((et, i) => ({
+        id: et.id,
+        title: et.title,
+        description: et.description,
+        duration: et.duration,
+        slug: et.slug,
+        color: et.color ?? colorForSlug(et.slug ?? `idx-${i}`),
+        bufferBeforeMinutes: et.bufferBeforeMinutes ?? 0,
+        bufferAfterMinutes: et.bufferAfterMinutes ?? 0,
+        questions: et.questions ?? [],
+      }))
+      setEventTypes(mapped)
+    } catch {
+      // Keep mock fallback
+    }
+  }, [setEventTypes])
+
+  React.useEffect(() => {
+    void loadEventTypes()
+  }, [loadEventTypes])
 
   const handleEdit = (eventType: EventType) => {
     setEditingEventType(eventType)
@@ -20,23 +53,86 @@ export default function EventTypesPage() {
   }
 
   const handleDelete = (id: string) => {
-    deleteEventType(id)
-    toast.success('Event type deleted')
+    ;(async () => {
+      try {
+        const res = await fetch('/api/event-types', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id }),
+        })
+
+        if (!res.ok) {
+          toast.error('Failed to delete event type')
+          return
+        }
+
+        toast.success('Event type deleted')
+        await loadEventTypes()
+      } catch {
+        toast.error('Failed to delete event type')
+      } finally {
+        setEditingEventType(null)
+      }
+    })()
   }
 
   const handleSave = (eventType: Omit<EventType, 'id'> & { id?: string }) => {
-    if (eventType.id) {
-      updateEventType(eventType.id, eventType)
-      toast.success('Event type updated')
-    } else {
-      const newEventType: EventType = {
-        ...eventType,
-        id: Date.now().toString(),
+    ;(async () => {
+      try {
+        if (eventType.id) {
+          const res = await fetch('/api/event-types', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              id: eventType.id,
+              title: eventType.title,
+              description: eventType.description,
+              duration: eventType.duration,
+              slug: eventType.slug,
+              color: eventType.color,
+              bufferBeforeMinutes: eventType.bufferBeforeMinutes ?? 0,
+              bufferAfterMinutes: eventType.bufferAfterMinutes ?? 0,
+              questions: eventType.questions ?? [],
+            }),
+          })
+
+          if (!res.ok) {
+            toast.error('Failed to update event type')
+            return
+          }
+
+          toast.success('Event type updated')
+        } else {
+          const res = await fetch('/api/event-types', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              title: eventType.title,
+              description: eventType.description,
+              duration: eventType.duration,
+              slug: eventType.slug,
+              color: eventType.color,
+              bufferBeforeMinutes: eventType.bufferBeforeMinutes ?? 0,
+              bufferAfterMinutes: eventType.bufferAfterMinutes ?? 0,
+              questions: eventType.questions ?? [],
+            }),
+          })
+
+          if (!res.ok) {
+            toast.error('Failed to create event type')
+            return
+          }
+
+          toast.success('Event type created')
+        }
+
+        await loadEventTypes()
+      } catch {
+        toast.error('Failed to save event type')
+      } finally {
+        setEditingEventType(null)
       }
-      addEventType(newEventType)
-      toast.success('Event type created')
-    }
-    setEditingEventType(null)
+    })()
   }
 
   const handleOpenDialog = () => {

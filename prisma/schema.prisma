@@ -1,0 +1,177 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum BookingStatus {
+  confirmed
+  cancelled
+  rescheduled
+}
+
+enum BookingQuestionType {
+  short_text
+  long_text
+  select
+}
+
+enum NotificationType {
+  booking_confirmed
+  booking_cancelled
+  booking_rescheduled
+}
+
+enum NotificationStatus {
+  logged
+  failed
+}
+
+model User {
+  id           String        @id @default("default")
+  name         String?
+  email        String?
+  avatar       String?
+  timezone     String        @default("America/New_York")
+  activeAvailabilitySchedule String @default("Default Schedule")
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  eventTypes   EventType[]
+  availability Availability[]
+  dateOverrides DateOverride[]
+}
+
+model EventType {
+  id                  String            @id @default(cuid())
+  title               String
+  description         String
+  duration            Int
+  slug                String            @unique
+  color               String            @default("bg-blue-500")
+  bufferBeforeMinutes Int               @default(0)
+  bufferAfterMinutes  Int               @default(0)
+
+  userId              String
+  user                User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  bookings            Booking[]
+  bookingQuestions    BookingQuestion[]
+
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+}
+
+model Availability {
+  id          String   @id @default(cuid())
+  scheduleName String  @default("Default Schedule")
+  dayOfWeek   Int
+  startTime   DateTime @db.Time(0)
+  endTime     DateTime @db.Time(0)
+
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([userId, scheduleName, dayOfWeek])
+}
+
+model Booking {
+  id               String             @id @default(cuid())
+
+  name             String
+  email            String
+  notes            String?
+  date             DateTime           @db.Date
+  startTime        DateTime           @db.Time(0)
+  endTime          DateTime           @db.Time(0)
+
+  status           BookingStatus
+
+  eventTypeId      String
+  eventType        EventType           @relation(fields: [eventTypeId], references: [id], onDelete: Cascade)
+
+  rescheduledFromId String?
+  rescheduledFrom   Booking?           @relation("BookingRescheduleChain", fields: [rescheduledFromId], references: [id], onDelete: SetNull)
+  rescheduledTo     Booking[]          @relation("BookingRescheduleChain")
+
+  answers          BookingAnswer[]
+  notifications    NotificationLog[]
+
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  @@index([eventTypeId, date])
+  // Prevent duplicate confirmed bookings for the same slot. Cancelled bookings remain allowed.
+  @@unique([eventTypeId, date, startTime, status])
+}
+
+model BookingQuestion {
+  id          String              @id @default(cuid())
+  label       String
+  type        BookingQuestionType
+  required    Boolean             @default(false)
+  position    Int                 @default(0)
+  optionsJson String?
+
+  eventTypeId String
+  eventType   EventType           @relation(fields: [eventTypeId], references: [id], onDelete: Cascade)
+
+  answers     BookingAnswer[]
+
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  @@index([eventTypeId, position])
+}
+
+model BookingAnswer {
+  id                String          @id @default(cuid())
+  value             String
+
+  bookingId         String
+  booking           Booking         @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  bookingQuestionId String
+  bookingQuestion   BookingQuestion @relation(fields: [bookingQuestionId], references: [id], onDelete: Cascade)
+
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  @@unique([bookingId, bookingQuestionId])
+}
+
+model DateOverride {
+  id          String   @id @default(cuid())
+  date        DateTime @db.Date
+  blocked     Boolean  @default(false)
+  startTime    DateTime? @db.Time(0)
+  endTime      DateTime? @db.Time(0)
+
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([userId, date])
+}
+
+model NotificationLog {
+  id         String             @id @default(cuid())
+  type       NotificationType
+  recipient  String
+  subject    String
+  payloadJson String
+  status     NotificationStatus @default(logged)
+
+  bookingId  String
+  booking    Booking            @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  createdAt  DateTime           @default(now())
+}
+

@@ -9,13 +9,46 @@ import { useSchedulingStore } from '@/lib/store'
 import { mockUser } from '@/lib/mock-data'
 import { cn } from '@/lib/utils'
 
+const colorPalette = ['bg-blue-500', 'bg-emerald-500', 'bg-amber-500', 'bg-rose-500', 'bg-purple-500']
+
 export default function UserBookingPage({
   params,
 }: {
-  params: Promise<{ username: string }>
+  params: { username: string }
 }) {
-  const { username } = React.use(params)
-  const { eventTypes } = useSchedulingStore()
+  const { username } = params
+  const { eventTypes, setEventTypes } = useSchedulingStore()
+
+  React.useEffect(() => {
+    let cancelled = false
+
+    async function loadEventTypes() {
+      try {
+        const res = await fetch('/api/event-types', { method: 'GET' })
+        if (!res.ok) return
+        const data = (await res.json()) as { eventTypes: any[] }
+
+        const mapped = data.eventTypes.map((et, i) => ({
+          id: et.id,
+          title: et.title,
+          description: et.description,
+          duration: et.duration,
+          slug: et.slug,
+          userId: et.userId,
+          color: colorPalette[i % colorPalette.length],
+        }))
+
+        if (!cancelled) setEventTypes(mapped)
+      } catch {
+        // Keep mock UI state if backend isn't reachable/configured.
+      }
+    }
+
+    loadEventTypes()
+    return () => {
+      cancelled = true
+    }
+  }, [setEventTypes])
 
   const colorMap: Record<string, string> = {
     'bg-blue-500': 'bg-blue-500',

@@ -5,25 +5,116 @@ import { Calendar } from 'lucide-react'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { BookingCard } from '@/components/dashboard/booking-card'
 import { BookingSkeleton } from '@/components/dashboard/booking-skeleton'
+import { RescheduleDialog } from '@/components/dashboard/reschedule-dialog'
 import { useSchedulingStore } from '@/lib/store'
+import type { Booking } from '@/lib/types'
 import { toast } from 'sonner'
 
 export default function BookingsPage() {
-  const { bookings, cancelBooking } = useSchedulingStore()
+  const { bookings, setBookings } = useSchedulingStore()
   const [loading, setLoading] = React.useState(true)
+  const [rescheduleOpen, setRescheduleOpen] = React.useState(false)
+  const [rescheduleBooking, setRescheduleBooking] = React.useState<Booking | null>(null)
+
+  const mapBookings = React.useCallback((items: Array<any>): Booking[] => {
+    const nowMs = Date.now()
+    return items.map((b: any) => {
+      const [hhStr, mmStr] = String(b.startTime).split(':')
+      const hh = Number(hhStr)
+      const mm = Number(mmStr)
+      const displayHour = hh % 12 || 12
+      const ampm = hh < 12 ? 'AM' : 'PM'
+      const timeLabel = `${displayHour}:${mm.toString().padStart(2, '0')} ${ampm}`
+
+      const slotMs = new Date(`${b.date}T${b.startTime}:00.000Z`).getTime()
+      const status: Booking['status'] =
+        b.status === 'cancelled' || b.status === 'rescheduled'
+          ? 'cancelled'
+          : slotMs < nowMs
+            ? 'past'
+            : 'upcoming'
+
+      return {
+        id: b.id,
+        guestName: b.name,
+        guestEmail: b.email,
+        eventType: b.eventTypeTitle ?? '',
+        eventTypeId: b.eventTypeId,
+        eventSlug: b.eventSlug ?? undefined,
+        date: b.date,
+        time: timeLabel,
+        startTime: b.startTime,
+        endTime: b.endTime,
+        notes: b.notes ?? '',
+        answers: b.answers ?? [],
+        rescheduledFromId: b.rescheduledFromId ?? null,
+        rescheduledToId: b.rescheduledToId ?? null,
+        status,
+      }
+    })
+  }, [])
+
+  const refreshBookings = React.useCallback(async () => {
+    const refreshed = await fetch('/api/bookings')
+    if (!refreshed.ok) return false
+    const data = (await refreshed.json()) as { bookings: Array<any> }
+    setBookings(mapBookings(data.bookings))
+    return true
+  }, [mapBookings, setBookings])
 
   React.useEffect(() => {
-    // Simulate loading
-    const timer = setTimeout(() => setLoading(false), 800)
-    return () => clearTimeout(timer)
-  }, [])
+    let cancelled = false
+
+    async function load() {
+      setLoading(true)
+      try {
+        const res = await fetch('/api/bookings')
+        if (!res.ok) return
+        const data = (await res.json()) as { bookings: Array<any> }
+        if (!cancelled) setBookings(mapBookings(data.bookings))
+      } catch {
+        // Keep mock fallback
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+
+    void load()
+
+    return () => {
+      cancelled = true
+    }
+  }, [mapBookings, setBookings])
 
   const upcomingBookings = bookings.filter((b) => b.status === 'upcoming')
   const pastBookings = bookings.filter((b) => b.status === 'past')
 
   const handleCancel = (id: string) => {
-    cancelBooking(id)
-    toast.success('Booking cancelled successfully')
+    ;(async () => {
+      try {
+        const res = await fetch('/api/bookings', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id }),
+        })
+
+        if (!res.ok) {
+          toast.error('Failed to cancel booking')
+          return
+        }
+
+        toast.success('Booking cancelled successfully')
+
+        await refreshBookings()
+      } catch {
+        toast.error('Failed to cancel booking')
+      }
+    })()
+  }
+
+  const handleReschedule = (booking: Booking) => {
+    setRescheduleBooking(booking)
+    setRescheduleOpen(true)
   }
 
   const EmptyState = ({ message }: { message: string }) => (
@@ -79,6 +170,7 @@ export default function BookingsPage() {
                 key={booking.id}
                 booking={booking}
                 onCancel={handleCancel}
+                onReschedule={handleReschedule}
               />
             ))
           )}
@@ -99,6 +191,18 @@ export default function BookingsPage() {
           )}
         </TabsContent>
       </Tabs>
+
+      <RescheduleDialog
+        open={rescheduleOpen}
+        onOpenChange={(next) => {
+          setRescheduleOpen(next)
+          if (!next) setRescheduleBooking(null)
+        }}
+        booking={rescheduleBooking}
+        onRescheduled={async () => {
+          await refreshBookings()
+        }}
+      />
     </div>
   )
 }
