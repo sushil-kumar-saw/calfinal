@@ -14,9 +14,9 @@ const colorPalette = ['bg-blue-500', 'bg-emerald-500', 'bg-amber-500', 'bg-rose-
 export default function UserBookingPage({
   params,
 }: {
-  params: { username: string }
+  params: Promise<{ username: string }>
 }) {
-  const { username } = params
+  const { username } = React.use(params)
   const { eventTypes, setEventTypes } = useSchedulingStore()
 
   React.useEffect(() => {

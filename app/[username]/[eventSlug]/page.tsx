@@ -37,9 +37,9 @@ type BookingStep = 'select-time' | 'details' | 'confirmed'
 export default function EventBookingPage({
   params,
 }: {
-  params: { username: string; eventSlug: string }
+  params: Promise<{ username: string; eventSlug: string }>
 }) {
-  const { username, eventSlug } = params
+  const { username, eventSlug } = React.use(params)
   const { eventTypes, availability, timezone, setTimezone } = useSchedulingStore()
 
   const [step, setStep] = React.useState<BookingStep>('select-time')
