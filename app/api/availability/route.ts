@@ -122,31 +122,57 @@ export async function GET() {
       timezone: getMockTimezone(),
     })
   }
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: DEFAULT_USER_ID },
+      select: { timezone: true, activeAvailabilitySchedule: true },
+    })
+    const rows = await prisma.availability.findMany({
+      where: { userId: DEFAULT_USER_ID },
+      orderBy: [{ dayOfWeek: 'asc' }, { startTime: 'asc' }],
+    })
 
-  const user = await prisma.user.findUnique({
-    where: { id: DEFAULT_USER_ID },
-    select: { timezone: true, activeAvailabilitySchedule: true },
-  })
-  const rows = await prisma.availability.findMany({
-    where: { userId: DEFAULT_USER_ID },
-    orderBy: [{ dayOfWeek: 'asc' }, { startTime: 'asc' }],
-  })
+    const schedules = mapAvailabilityRowsToSchedules(rows, user?.activeAvailabilitySchedule ?? 'Default Schedule')
+    const activeSchedule = schedules.find((schedule) => schedule.isActive) ?? schedules[0] ?? null
+    const availability = flattenScheduleToApiAvailability(activeSchedule)
 
-  const schedules = mapAvailabilityRowsToSchedules(rows, user?.activeAvailabilitySchedule ?? 'Default Schedule')
-  const activeSchedule = schedules.find((schedule) => schedule.isActive) ?? schedules[0] ?? null
-  const availability = flattenScheduleToApiAvailability(activeSchedule)
-
-  return NextResponse.json({
-    availability,
-    schedules: schedules.map((schedule) => ({
+    return NextResponse.json({
+      availability,
+      schedules: schedules.map((schedule) => ({
+        id: schedule.id,
+        name: schedule.name,
+        isActive: schedule.isActive,
+        availability: flattenScheduleToApiAvailability(schedule),
+      })),
+      activeScheduleName: activeSchedule?.name ?? 'Default Schedule',
+      timezone: user?.timezone ?? DEFAULT_TIMEZONE,
+    })
+  } catch (err) {
+    // If the database is unreachable or an error occurs, fall back to mock data.
+    // This prevents build-time failures (Vercel may attempt to collect page data during build).
+    console.error('DB error in /api/availability GET:', err)
+    const schedules = getMockAvailabilitySchedules().map((schedule) => ({
       id: schedule.id,
       name: schedule.name,
       isActive: schedule.isActive,
-      availability: flattenScheduleToApiAvailability(schedule),
-    })),
-    activeScheduleName: activeSchedule?.name ?? 'Default Schedule',
-    timezone: user?.timezone ?? DEFAULT_TIMEZONE,
-  })
+      availability: Array.from({ length: 7 }).map((_, dayOfWeek) => {
+        const dayData = schedule.availability.find((day) => day.dayOfWeek === dayOfWeek)
+        return {
+          dayOfWeek,
+          enabled: dayData?.enabled ?? false,
+          ranges: dayData?.ranges ?? [],
+        }
+      }),
+    }))
+    const activeSchedule = schedules.find((schedule) => schedule.isActive) ?? schedules[0] ?? null
+
+    return NextResponse.json({
+      availability: activeSchedule?.availability ?? [],
+      schedules,
+      activeScheduleName: activeSchedule?.name ?? 'Default Schedule',
+      timezone: getMockTimezone(),
+    })
+  }
 }
 
 export async function PUT(request: Request) {
@@ -220,78 +246,82 @@ export async function PUT(request: Request) {
 
     return NextResponse.json({ ok: true, timezone, activeScheduleName })
   }
+  try {
+    const body = await request.json().catch(() => null)
+    const timezone = typeof body?.timezone === 'string' ? body.timezone : DEFAULT_TIMEZONE
+    const schedules = normalizeIncomingSchedules(body)
+    if (!schedules.length) {
+      return NextResponse.json({ error: 'Expected availability schedules' }, { status: 400 })
+    }
+    const activeScheduleName =
+      typeof body?.activeScheduleName === 'string'
+        ? body.activeScheduleName
+        : schedules.find((schedule) => schedule.isActive)?.name ?? schedules[0].name
 
-  const body = await request.json().catch(() => null)
-  const timezone = typeof body?.timezone === 'string' ? body.timezone : DEFAULT_TIMEZONE
-  const schedules = normalizeIncomingSchedules(body)
-  if (!schedules.length) {
-    return NextResponse.json({ error: 'Expected availability schedules' }, { status: 400 })
-  }
-  const activeScheduleName =
-    typeof body?.activeScheduleName === 'string'
-      ? body.activeScheduleName
-      : schedules.find((schedule) => schedule.isActive)?.name ?? schedules[0].name
+    // Replace full weekly availability.
+    await prisma.availability.deleteMany({ where: { userId: DEFAULT_USER_ID } })
 
-  // Replace full weekly availability.
-  await prisma.availability.deleteMany({ where: { userId: DEFAULT_USER_ID } })
+    const createData: Array<{
+      dayOfWeek: number
+      startTime: Date
+      endTime: Date
+      scheduleName: string
+    }> = []
 
-  const createData: Array<{
-    dayOfWeek: number
-    startTime: Date
-    endTime: Date
-    scheduleName: string
-  }> = []
+    for (const schedule of schedules) {
+      for (const dayEntry of schedule.availability ?? []) {
+        const enabled =
+          dayEntry?.enabled === undefined ? true : Boolean(dayEntry.enabled)
 
-  for (const schedule of schedules) {
-    for (const dayEntry of schedule.availability ?? []) {
-      const enabled =
-        dayEntry?.enabled === undefined ? true : Boolean(dayEntry.enabled)
+        const ranges = parseIncomingRanges(dayEntry)
+        if (!enabled || ranges.length === 0) continue
 
-      const ranges = parseIncomingRanges(dayEntry)
-      if (!enabled || ranges.length === 0) continue
+        let dayOfWeek: number | undefined = undefined
+        if (typeof dayEntry?.dayOfWeek === 'number') dayOfWeek = dayEntry.dayOfWeek
+        else if (typeof dayEntry?.day === 'string') {
+          dayOfWeek = DAY_NAME_TO_DAY_OF_WEEK[dayEntry.day]
+        }
 
-      let dayOfWeek: number | undefined = undefined
-      if (typeof dayEntry?.dayOfWeek === 'number') dayOfWeek = dayEntry.dayOfWeek
-      else if (typeof dayEntry?.day === 'string') {
-        dayOfWeek = DAY_NAME_TO_DAY_OF_WEEK[dayEntry.day]
-      }
+        if (dayOfWeek === undefined || dayOfWeek < 0 || dayOfWeek > 6) {
+          return NextResponse.json({ error: `Invalid day: ${dayEntry?.day ?? dayEntry?.dayOfWeek}` }, { status: 400 })
+        }
 
-      if (dayOfWeek === undefined || dayOfWeek < 0 || dayOfWeek > 6) {
-        return NextResponse.json({ error: `Invalid day: ${dayEntry?.day ?? dayEntry?.dayOfWeek}` }, { status: 400 })
-      }
+        for (const r of ranges) {
+          const startMinutes = parseHHMMToMinutes(r.startTime)
+          const endMinutes = parseHHMMToMinutes(r.endTime)
+          if (startMinutes >= endMinutes) continue
 
-      for (const r of ranges) {
-        const startMinutes = parseHHMMToMinutes(r.startTime)
-        const endMinutes = parseHHMMToMinutes(r.endTime)
-        if (startMinutes >= endMinutes) continue
-
-        createData.push({
-          dayOfWeek,
-          startTime: minutesToTimeOnlyDate(startMinutes),
-          endTime: minutesToTimeOnlyDate(endMinutes),
-          scheduleName: schedule.name,
-        })
+          createData.push({
+            dayOfWeek,
+            startTime: minutesToTimeOnlyDate(startMinutes),
+            endTime: minutesToTimeOnlyDate(endMinutes),
+            scheduleName: schedule.name,
+          })
+        }
       }
     }
-  }
 
-  if (createData.length) {
-    await prisma.availability.createMany({
-      data: createData.map((d) => ({
-        dayOfWeek: d.dayOfWeek,
-        startTime: d.startTime,
-        endTime: d.endTime,
-        scheduleName: d.scheduleName,
-        userId: DEFAULT_USER_ID,
-      })),
+    if (createData.length) {
+      await prisma.availability.createMany({
+        data: createData.map((d) => ({
+          dayOfWeek: d.dayOfWeek,
+          startTime: d.startTime,
+          endTime: d.endTime,
+          scheduleName: d.scheduleName,
+          userId: DEFAULT_USER_ID,
+        })),
+      })
+    }
+
+    await prisma.user.update({
+      where: { id: DEFAULT_USER_ID },
+      data: { timezone, activeAvailabilitySchedule: activeScheduleName },
     })
+
+    return NextResponse.json({ ok: true, timezone, activeScheduleName })
+  } catch (err) {
+    console.error('DB error in /api/availability PUT:', err)
+    return NextResponse.json({ error: 'Database error' }, { status: 500 })
   }
-
-  await prisma.user.update({
-    where: { id: DEFAULT_USER_ID },
-    data: { timezone, activeAvailabilitySchedule: activeScheduleName },
-  })
-
-  return NextResponse.json({ ok: true, timezone, activeScheduleName })
 }
 
